@@ -76,6 +76,27 @@ class BlockChain:
     def mine_block(self):
         new_block = Block()
 
+        # get pending transactions from the server
+        resp = requests.get("http://127.0.0.1:8000/blocks/transactions/pending/")
+        pending_transactions_list = resp.json()
+        # (self, sender_id, sender_pub_key, receiver_pub_key, amount)
+        # pending_transactions_from_server
+        pending_transactions_fs = []
+        for transaction_data in pending_transactions_list:
+            pending_transaction = Transaction(transaction_data.get("sender_id"), transaction_data.get("sender_pub_key"),
+                                              transaction_data.get("receiver_pub_key"), transaction_data.get("amount"))
+            pending_transaction.trxn_uuid = transaction_data.get("trxn_uuid")
+            pending_transaction.trxn_hash = transaction_data.get("trxn_hash")
+            pending_transaction.trnx_signature = transaction_data.get("trxn_signature")
+            pending_transactions_fs.append(pending_transaction)
+
+        # testing
+        print(len(pending_transactions_fs))
+        for tr in pending_transactions_fs:
+            tr.print()
+
+        # end blcok
+
         pending_transactions_copy = self.pending_transactions.copy()
         for pending_transaction in pending_transactions_copy:
             if BlockChain.verify_transaction(pending_transaction):
@@ -172,6 +193,12 @@ class Wallet:
         transaction.trnx_signature = self.sign_transaction(transaction)
         print(transaction.as_dict_for_json())
         print(json.dumps(transaction.as_dict_for_json()))
+
+        # Sending the transaction to the server so that is availble to everyone
+        headers = {"Content-type": "application/json"}
+        payload = json.dumps(transaction.as_dict_for_json())
+        requests.post("http://127.0.0.1:8000/blocks/transactions/new/", data=payload, headers=headers)
+        print(payload)
         blockchain.receive_transaction(transaction)
 
     @staticmethod
