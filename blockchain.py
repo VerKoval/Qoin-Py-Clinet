@@ -5,6 +5,14 @@ from cryptography.hazmat.primitives import serialization
 from helperfunctions import *
 import json
 import requests
+from helperStructs import *
+import db
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+
+engine = create_engine("sqlite:///blockchain.db", echo=True)
+Session = sessionmaker(bind=engine)
+session = Session()
 
 
 class Block:
@@ -74,7 +82,13 @@ class BlockChain:
         self.all_blocks.append(new_block)
 
     def mine_block(self):
+        # create geneis block
+        # genesis_block = db.Block(hash="GenesisBlock", prev_block_hash='GenesisBlock')
+        # session.add(genesis_block)
+        # session.commit()
         new_block = Block()
+
+        print(session.query(db.Block).first())
 
         # get pending transactions from the server
         resp = requests.get("http://127.0.0.1:8000/blocks/transactions/pending/")
@@ -95,7 +109,7 @@ class BlockChain:
         for tr in pending_transactions_fs:
             tr.print()
 
-        # end blcok
+        # end testing block
 
         pending_transactions_copy = self.pending_transactions.copy()
         for pending_transaction in pending_transactions_copy:
@@ -155,6 +169,17 @@ class BlockChain:
                 print(f"Transaction {trxn_index+1}", end="")
                 trnx.print()
             print("------------------------------")
+
+    def get_and_verify_current_block_chain_state(self):
+        all_blocks_list = requests.get("http://127.0.0.1:8000/blocks/all/")
+        all_blocks_list = all_blocks_list.json()
+        all_blocks= []
+        for block_data in all_blocks_list:
+            single_block = BlockStruct(block_data.get("id"), block_data.get("hash"), block_data.get("prev_block_hash"))
+            single_block.print()
+            all_blocks.append(single_block)
+
+    # finish this function
 
 
 class Wallet:

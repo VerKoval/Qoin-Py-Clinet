@@ -1,0 +1,19 @@
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+
+# Ignore database files
+blockchain.db
+
+# Ignore virtual environment
+venv/
+
+# Ignore IDE specific files
+.idea/
+
+# Ignore miscellaneous text files
+scrap.txt
+
+# Ignore git itself
+.git/
+
