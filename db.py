@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, ForeignKey, Enum, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from enum import Enum as PyEnum
+import os
 
 Base = declarative_base()
 
@@ -44,4 +45,26 @@ class Wallet(Base):
     public_key = Column(String(200), nullable=False)
     balance = Column(Integer, nullable=False)
 
+
+Base
+# Whenever a new node is created along with its local database,
+# a genesis block must also be created. The following code snippet
+# ensures that the genesis block is created.
+
+db_file = "blockchain.db"
+# Check if the database file exists
+if not os.path.exists(db_file):
+    # If the database file doesn't exist, run db.py to create it
+    print("Database not found. Creating a new database...")
+    engine = create_engine("sqlite:///blockchain.db")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    genesis_block = Block(hash="GenesisBlock", prev_block_hash='GenesisBlock')
+    session.add(genesis_block)
+    session.commit()
+
+else:
+    print("Database found. Connecting to the database...")
 

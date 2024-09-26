@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 
 # Ignore database files
-blockchain.db
+testing/blockchain.db
 
 # Ignore virtual environment
 venv/

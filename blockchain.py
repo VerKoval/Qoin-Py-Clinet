@@ -1,64 +1,54 @@
 import hashlib
 import uuid
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 from helperfunctions import *
 import json
 import requests
 from helperStructs import *
 import db
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, desc
+from sqlalchemy.orm import sessionmaker
+import os
 
-engine = create_engine("sqlite:///blockchain.db", echo=True)
+# Path to the SQLite database file
+
+
+engine = create_engine("sqlite:///blockchain.db")
 Session = sessionmaker(bind=engine)
 session = Session()
 
 
 class Block:
     def __init__(self):
-        self.transactions = []
         self.hash = ""
         self.prev_block_hash = ""
 
-    def add_transaction(self, transaction):
-        self.transactions.append(transaction)
-
-    def get_transaction_count(self):
-        return len(self.transactions)
-
 
 class Transaction:
-    def __init__(self, sender_id, sender_pub_key, receiver_pub_key, amount):
-        # look up the user in the database and see if he has the funds to do this, if not, ABORT!
+    def __init__(self, sender_id, sender_pub_key, receiver_pub_key, amount, trxn_id=0):
         self.sender_id = sender_id
         self.trxn_uuid = uuid.uuid4()
-        self.sender_pub_key: Ed25519PublicKey = sender_pub_key
+        self.sender_pub_key = sender_pub_key
         self.receiver_pub_key = receiver_pub_key
         self.amount = amount
         self.trxn_hash = ""
-        self.trnx_signature: bytes = bytes("", "utf-8")
-
-    def generate_transaction_hash(self) -> str:
-        transaction_string = f"sndrid{self.sender_id}-trxnid:{self.trxn_uuid}-sndrpk:{self.sender_pub_key}-" \
-                             f"rcvrpk{self.sender_pub_key}-amt{self.amount}"
-        transaction_string_as_bytes = bytes(transaction_string, 'utf-8')
-        return hashlib.sha256(transaction_string_as_bytes).hexdigest()
-
-    def sign_transaction(self):
-        pass
+        self.trxn_signature = ""
+        self.trxn_id = trxn_id
 
     def print(self):
+        """Displays Transaction data. Used for debugging purposes"""
         print(f"""
         Transaction UUID: {self.trxn_uuid},
         Sender Public Key: {self.sender_pub_key[27:-26]},
         Receiver Public Key: {self.receiver_pub_key},
         Transaction Amount: {self.amount},
         Transaction Hash: {self.trxn_hash},
-        Transaction Signature: {self.trnx_signature}
+        Transaction Signature: {self.trxn_signature}
 """)
 
     def as_dict_for_json(self):
+        """Returns transaction data as dictionary (intended for each conversion in json)"""
         return ({
             "sender_id": self.sender_id,
             "trxn_uuid": str(self.trxn_uuid),
@@ -66,95 +56,81 @@ class Transaction:
             "receiver_pub_key": self.receiver_pub_key,
             "amount": self.amount,
             "trxn_hash": self.trxn_hash,
-            "trxn_signature": binary_to_b64(self.trnx_signature)
+            "trxn_signature": self.trxn_signature
         })
 
 
 class BlockChain:
-    def __init__(self):
-        self.all_blocks = []
-        self.pending_transactions = []
-
-    def receive_transaction(self, transaction):
-        self.pending_transactions.append(transaction)
-
-    def add_block(self, new_block: Block):
-        self.all_blocks.append(new_block)
-
-    def mine_block(self):
-        # create geneis block
-        # genesis_block = db.Block(hash="GenesisBlock", prev_block_hash='GenesisBlock')
-        # session.add(genesis_block)
-        # session.commit()
-        new_block = Block()
-
-        print(session.query(db.Block).first())
-
-        # get pending transactions from the server
+    def mine_block(self, miner_id):
+        """Retrieves pending transactions from the server,
+        verifies them, creates block and sends block to the
+        server.
+        """
+        # Get pending transactions from the server
         resp = requests.get("http://127.0.0.1:8000/blocks/transactions/pending/")
         pending_transactions_list = resp.json()
-        # (self, sender_id, sender_pub_key, receiver_pub_key, amount)
-        # pending_transactions_from_server
-        pending_transactions_fs = []
+
+        pending_transactions_from_server = []
+        # For each pending transaction, create a Transaction object, and add it to the
+        # list of pending transactions retrieved from the server
         for transaction_data in pending_transactions_list:
-            pending_transaction = Transaction(transaction_data.get("sender_id"), transaction_data.get("sender_pub_key"),
-                                              transaction_data.get("receiver_pub_key"), transaction_data.get("amount"))
+            pending_transaction = Transaction(sender_id=transaction_data.get("sender_id"),
+                                              sender_pub_key=transaction_data.get("sender_pub_key"),
+                                              receiver_pub_key=transaction_data.get("receiver_pub_key"),
+                                              amount=transaction_data.get("amount"))
             pending_transaction.trxn_uuid = transaction_data.get("trxn_uuid")
             pending_transaction.trxn_hash = transaction_data.get("trxn_hash")
-            pending_transaction.trnx_signature = transaction_data.get("trxn_signature")
-            pending_transactions_fs.append(pending_transaction)
+            pending_transaction.trxn_signature = transaction_data.get("trxn_signature")
+            pending_transactions_from_server.append(pending_transaction)
 
-        # testing
-        print(len(pending_transactions_fs))
-        for tr in pending_transactions_fs:
-            tr.print()
+        verified_transaction = []
+        # Only add verified transactions to the verified transactions list
+        for trxn in pending_transactions_from_server:
+            if self.verify_transaction(trxn):
+                verified_transaction.append(trxn)
 
-        # end testing block
+        # if the list of verified transactions aren't empty
+        # hash their uuid, get the current last block's hash
+        # concatenate them all together, hash the result and use it as the current blocks hash
+        if verified_transaction:
+            all_transactions_hashes_as_str = "".join([trxn.trxn_hash for trxn in verified_transaction])
+            previous_block_hash = session.query(db.Block).order_by(desc(db.Block.id)).first().hash
+            new_block_hash_ingest = all_transactions_hashes_as_str + previous_block_hash
+            new_block_hash = hashlib.sha256((bytes(new_block_hash_ingest, 'utf-8'))).hexdigest()
 
-        pending_transactions_copy = self.pending_transactions.copy()
-        for pending_transaction in pending_transactions_copy:
-            if BlockChain.verify_transaction(pending_transaction):
-                new_block.add_transaction(pending_transaction)
-                self.pending_transactions.remove(pending_transaction)
-            if new_block.get_transaction_count() > 9:
-                break
-        if new_block.get_transaction_count() > 0:
-            all_transactions_hashes_as_str = "".join([trxn.trxn_hash for trxn in new_block.transactions])
-
-            # sending to the server
-            new_block_hash = hashlib.sha256((bytes(all_transactions_hashes_as_str, 'utf-8'))).hexdigest()
-            new_block.hash = new_block_hash
+            # Construct a payload to be sent to the broadcasting server
             payload = {
-                "block_hash": "sbfhjbewfhb",
-                "prev_block_hash": "sdfjhcwbdfhjk",
-                "transactions": [trxn.as_dict_for_json() for trxn in pending_transactions_copy]
+                "hash": new_block_hash,
+                "previous_block_hash": previous_block_hash,
+                "transactions": [trxn.as_dict_for_json() for trxn in verified_transaction],
+                "miner_id": miner_id
             }
-            payload = json.dumps(payload)
-            headers = {"Content-type": "application/json"}
-            print(payload)
-            # print(json.dumps(payload))
-            # send the info to the server
 
+            payload = json.dumps(payload)
+
+            # Send the payload to the broadcasting server
+            headers = {"Content-type": "application/json"}
             resp = requests.post("http://127.0.0.1:8000/blocks/new/", data=payload, headers=headers)
-            self.add_block(new_block)
+        else:
+            print("Unable to verify any of the transactions")
 
     @staticmethod
     def verify_transaction(transaction: Transaction) -> bool:
-        # testing signature verification
-
-        # if transaction.receiver_pub_key == "dhjfb":
-        #     transaction.trxn_hash += "hsbkjdnckj"
-        # end test
-
-        # add functionality to check that the user has enough funds to make this transaction
+        # By default, we assume that the transactions are valid
         transaction_is_valid: bool = True
-        if transaction.amount < 0:
+
+        # Checks that the sender has the necessary funds to make this transaction
+        resp = requests.get(f"http://127.0.0.1:8000/blocks/wallets/balance/{transaction.sender_id}/")
+        sender_balance = resp.json().get("wallet_balance")
+        # Checks that the transaction amount is valid
+        if sender_balance < transaction.amount or transaction.amount < 0:
             transaction_is_valid = False
             print("Invalid Transaction Amount!")
+
+        # Check that the transaction was signed with the proper credentials
         try:
-            serialization.load_pem_public_key(transaction.sender_pub_key.encode("utf-8"))\
-                .verify(transaction.trnx_signature, bytes(transaction.trxn_hash, "utf-8"))
-            print("Signature is valid")
+            serialization.load_pem_public_key(bytes(transaction.sender_pub_key.replace("\\n", "\n"), "utf-8"))\
+                .verify(b64_to_binary(transaction.trxn_signature), bytes(transaction.trxn_hash, "utf-8"))
         except:
             print("Transaction signature is invalid!")
             transaction_is_valid = False
@@ -162,78 +138,173 @@ class BlockChain:
         return transaction_is_valid
 
     def print_current_blocks(self):
+        """Displays the blocks in the blockchain. Intended for debugging"""
         for (block_index, block) in enumerate(self.all_blocks):
             print("------------------------------")
             print(f"Block {block_index+1} hash: {block.hash}\n")
-            for (trxn_index, trnx) in enumerate(block.transactions):
+            for (trxn_index, trxn) in enumerate(block.transactions):
                 print(f"Transaction {trxn_index+1}", end="")
-                trnx.print()
+                trxn.print()
             print("------------------------------")
 
     def get_and_verify_current_block_chain_state(self):
-        all_blocks_list = requests.get("http://127.0.0.1:8000/blocks/all/")
+        """Updates the state of local nodes"""
+        # Get the last blocks ID
+        last_block_id = session.query(db.Block).order_by(desc(db.Block.id)).first().id
+        # Get the not synced blocks from the server
+        all_blocks_list = requests.get(f"http://127.0.0.1:8000/blocks/after/{last_block_id}/")
         all_blocks_list = all_blocks_list.json()
-        all_blocks= []
+        all_blocks = []
+        # for each block, serialize its data
         for block_data in all_blocks_list:
+            block_obj = db.Block(id=block_data.get("id"), hash=block_data.get("hash"),
+                                 prev_block_hash=block_data.get("prev_block_hash"))
             single_block = BlockStruct(block_data.get("id"), block_data.get("hash"), block_data.get("prev_block_hash"))
-            single_block.print()
-            all_blocks.append(single_block)
 
-    # finish this function
+            # Get each blocks transactions
+            all_block_transactions_data = requests.get(f"http://127.0.0.1:8000/blocks/{block_obj.id}/transactions/")
+            all_block_transactions_data = all_block_transactions_data.json()
+            all_block_transactions_are_valid = True
+            serialized_transactions = []
+            # Verify each of the transactions in the block
+            for trxn_data in all_block_transactions_data:
+                trxn = Transaction(sender_id=trxn_data.get("sender_id"), sender_pub_key=trxn_data.get("sender_pub_key"),
+                                   receiver_pub_key=trxn_data.get("receiver_pub_key"), amount=trxn_data.get("amount"),
+                                   trxn_id=trxn_data.get("id"))
+                trxn.trxn_uuid = trxn_data.get("trxn_uuid"),
+                trxn.trxn_hash = trxn_data.get("trxn_hash"),
+                # For some reason, the trxn hash and trxn uuid comes in as a tuple with one element, the actual
+                # trxn hash, As a result, we must parse it out.
+                trxn.trxn_uuid = trxn.trxn_uuid[0]
+                trxn.trxn_hash = trxn.trxn_hash[0]
+                trxn.trxn_signature = trxn_data.get("trxn_signature")
+                trxn.print()
+                serialized_transactions.append(trxn)
+                if not (self.verify_transaction(trxn)):
+                    all_block_transactions_are_valid = False
+                    print(f"transaction {trxn.trxn_uuid} not valid")
+
+            # If all the transactions in a block are valid, create a new block and create all of its transactions
+            if all_block_transactions_are_valid:
+                new_block = db.Block(id=block_obj.id, hash=block_obj.hash, prev_block_hash=block_obj.prev_block_hash)
+                session.add(new_block)
+                for trxn in serialized_transactions:
+                    trxn_to_save = db.Transaction(id=trxn.trxn_id, sender_id=trxn.sender_id, trxn_uuid=trxn.trxn_uuid,
+                                                  sender_pub_key=trxn.sender_pub_key,
+                                                  receiver_pub_key=trxn.receiver_pub_key, amount=trxn.amount,
+                                                  trxn_hash=trxn.trxn_hash, trxn_signature=trxn.trxn_signature,
+                                                  parent_block_id=block_obj.id, status=db.StatusEnum.verified)
+
+                    session.add(trxn_to_save)
+
+                all_trxn_uuids = "".join([trxn.trxn_hash for trxn in serialized_transactions])
+                all_trxn_uuids += block_obj.prev_block_hash
+                session.commit()
+            else:
+                print("Unable to verify block")
+
+    @staticmethod
+    def print_current_chain_sate():
+        """Displays the current state of the blockchain"""
+        all_blocks = session.query(db.Block).all()
+        for block in all_blocks:
+            print("---------------------------------------------------------------------------------------------------")
+            print()
+            print(f"\t\t\t\t\tBlock: {block.id}")
+            print(f"Block ID: {block.id} \nBlock Hash: {block.hash} \nPrev Block Hash: {block.prev_block_hash}")
+            print()
+            print()
+            print("\t\t\t\t\tBlock Transactons")
+            all_block_transactions = session.query(db.Transaction).filter_by(parent_block=block)
+            for trxn in all_block_transactions:
+                print()
+                print(f"\tTransaction ID: {trxn.id}, \n\tTransaction UUID: {trxn.trxn_uuid},"
+                      f"\n\tTransaction Hash: {trxn.trxn_hash}")
+                print()
+            print("---------------------------------------------------------------------------------------------------")
+
+    def verify_block(self, block_id):
+        """Verifies Blocks"""
+        all_block_transactions_data = requests.get(f"http://127.0.0.1:8000/blocks/{block_id}/transactions/")
+        all_block_transactions_data = all_block_transactions_data.json()
+        all_block_transactions_are_valid = True
+        serialized_transactions = []
+        for trxn_data in all_block_transactions_data:
+            trxn = Transaction(trxn_data.get("sender_id"), trxn_data.get("sender_pub_key"),
+                               trxn_data.get("receiver_pub_key"), trxn_data.get("amount"))
+            trxn.trxn_uuid = trxn_data.get("trxn_uuid"),
+            trxn.trxn_hash = trxn_data.get("trxn_hash"),
+            # For some reason, the trxn hash comes in as a tuple with one element, the actual trxn hash
+            # As a result, we must parse it out.
+            trxn.trxn_hash = trxn.trxn_hash[0]
+            trxn.trxn_signature = trxn_data.get("trxn_signature")
+            serialized_transactions.append(trxn)
+            if not(self.verify_transaction(trxn)):
+                all_block_transactions_are_valid = False
+                print(f"transaction {trxn.trxn_uuid} not valid")
+        return all_block_transactions_are_valid
 
 
 class Wallet:
-    def __init__(self, sender_id):
-        self.sender_id = sender_id
-        self.private_key = Ed25519PrivateKey.generate()
-        self.public_key = self.private_key.public_key()
-        # self.sender_id = sender_id
-        # convert private key into string
-        pem_private_key = self.private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        )
-        private_key_str = pem_private_key.decode('utf-8')
-        self.private_key = private_key_str
+    def __init__(self, wallet_id, private_key="", public_key=""):
+        self.wallet_id = wallet_id
+        if private_key and public_key:
+            self.private_key = private_key
+            self.public_key = public_key
+        else:
+            self.private_key = Ed25519PrivateKey.generate()
+            self.public_key = self.private_key.public_key()
 
-        # convert public key into string
-        pem_public_key = self.public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        public_key_str = pem_public_key.decode('utf-8')
-        self.public_key = public_key_str
+            # convert private key into string
+            pem_private_key = self.private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            )
+            private_key_str = pem_private_key.decode('utf-8')
+            self.private_key = private_key_str
 
-        # print(f"private key: {self.private_key[28:-27]}")
-        # print(f"public key: {self.public_key[27:-26]}")
-
+            # convert public key into string
+            pem_public_key = self.public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            public_key_str = pem_public_key.decode('utf-8')
+            self.public_key = public_key_str
+        # Modify this to fetch the balance from the relay server or database
         self.balance = 1000
-        # print(f"private key: {serialization.load_pem_private_key(self.private_key.encode('utf-8'), password=None)}")
-        # print(f"public key: {serialization.load_pem_public_key(self.public_key.encode('utf-8'))}")
 
-    def make_transaction(self, blockchain, sender_pub_key, amount):
-        transaction = Transaction(self.sender_id, self.public_key, sender_pub_key, amount)
+    def get_wallet_balance(self):
+        """Retrieves the wallet's balance"""
+        resp = requests.get(f"http://127.0.0.1:8000/blocks/wallets/balance/{self.wallet_id}/")
+        wallet_balance = resp.json().get("wallet_balance")
+        return int(wallet_balance)
+
+    def make_transaction(self, receiver_pub_key, amount):
+        """Creates new transaction and broadcasts it to the server"""
+        transaction = Transaction(self.wallet_id, self.public_key, receiver_pub_key, amount)
         transaction.trxn_hash = Wallet.generate_transaction_hash(transaction)
-        transaction.trnx_signature = self.sign_transaction(transaction)
-        print(transaction.as_dict_for_json())
-        print(json.dumps(transaction.as_dict_for_json()))
+        transaction.trxn_signature = self.sign_transaction(transaction)
 
-        # Sending the transaction to the server so that is availble to everyone
+        # Sending the transaction to the broadcasting server
         headers = {"Content-type": "application/json"}
+
+        transaction.trxn_signature = binary_to_b64(transaction.trxn_signature)
         payload = json.dumps(transaction.as_dict_for_json())
         requests.post("http://127.0.0.1:8000/blocks/transactions/new/", data=payload, headers=headers)
-        print(payload)
-        blockchain.receive_transaction(transaction)
 
     @staticmethod
     def generate_transaction_hash(transaction: Transaction) -> str:
+        """Generates transaction hash"""
         transaction_string = f"id:{transaction.trxn_uuid}-sndrpk:{transaction.sender_pub_key}-" \
                              f"rcvrpk{transaction.sender_pub_key}-amt{transaction.amount}"
         transaction_string_as_bytes = bytes(transaction_string, 'utf-8')
         return hashlib.sha256(transaction_string_as_bytes).hexdigest()
 
     def sign_transaction(self, transaction: Transaction) -> bytes:
+        """Generates transaction signature"""
+        print(self.private_key)
+        print(self.private_key.encode("utf-8"))
         transaction_signature = serialization.load_pem_private_key(self.private_key.encode("utf-8"), password=None)\
             .sign(bytes(transaction.trxn_hash, "utf-8"))
         return transaction_signature

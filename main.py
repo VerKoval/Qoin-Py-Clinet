@@ -1,73 +1,131 @@
 from blockchain import *
+from InquirerPy import prompt
 
-user = Wallet(3)
-q_coin = BlockChain()
-# q_coin.get_and_verify_current_block_chain_state()
+qoin = BlockChain()
+user = Wallet(0, "", "")
 
 
-# user.make_transaction(q_coin, "rfvefvefv", 3)
-#
-# user.make_transaction(q_coin, "dhjfb", 50)
-#
-q_coin.mine_block()
-# user.make_transaction(q_coin, "fonjwc", 4)
-# user.make_transaction(q_coin, "fonjwc", 4)
-# user.make_transaction(q_coin, "fonjwc", 4)
-# user.make_transaction(q_coin, "fonjwc", 4)
-#
-#
-# q_coin.mine_block()
-# q_coin.print_current_blocks()
-# print(user.private_key)
-# print(user.public_key)
+def load_existing_wallet():
+    global user
+    print("Loading existing wallet...")
+    credentials = [
+        {
+            "type": "input",
+            "name": "private_key",
+            "message": "Enter your private key:",
+        },
+        {
+            "type": "password",
+            "name": "pubic_key",
+            "message": "Enter your public key:",
+        }
+    ]
+    creds = prompt(credentials)
+    # Load existing wallet
+    print("Loading existing wallet...")
+    resp = requests.get(f"http://127.0.0.1:8000/blocks/wallets/{creds['private_key']}/")
+    resp = resp.json()
+    user = Wallet(resp.get("wallet_id"), creds["private_key"], creds["public_key"])
+    print(f"Wallet Info ~ Private key: \n{user.private_key}, Public Key: \n{user.public_key}")
 
-#
-# from sqlalchemy import Column, Integer, String, ForeignKey, Enum, create_engine
-# from sqlalchemy.orm import declarative_base, relationship, sessionmaker
-# from enum import Enum as PyEnum
-#
-# Base = declarative_base()
-#
-#
-# # Choices equivalent in SQLAlchemy using Enum
-# class StatusEnum(PyEnum):
-#     pending = "pending"
-#     verified = "verified"
-#
-#
-# class Block(Base):
-#     __tablename__ = 'block'
-#     id = Column(Integer, primary_key=True, autoincrement=True)
-#     hash = Column(String(200), nullable=False)
-#     prev_block_hash = Column(String(200), nullable=False)
-#
-#
-# class Transaction(Base):
-#     __tablename__ = 'transaction'
-#     id = Column(Integer, primary_key=True, autoincrement=True)
-#     sender_id = Column(Integer, nullable=False)
-#     trxn_uuid = Column(String(200), nullable=False)
-#     sender_pub_key = Column(String(200), nullable=False)
-#     receiver_pub_key = Column(String(200), nullable=False)
-#     amount = Column(Integer, nullable=False)
-#     trxn_hash = Column(String(200), nullable=False)
-#     trxn_signature = Column(String(200), nullable=False)
-#     parent_block_id = Column(Integer, ForeignKey('block.id'), nullable=False)
-#     status = Column(Enum(StatusEnum), default=StatusEnum.pending)
-#
-#     parent_block = relationship("Block", back_populates="transactions")
-#
-#
-# Block.transactions = relationship("Transaction", order_by=Transaction.id, back_populates="parent_block")
-#
-#
-# class Wallet(Base):
-#     __tablename__ = 'wallet'
-#     id = Column(Integer, primary_key=True, autoincrement=True)
-#     private_key = Column(String(200), nullable=False)
-#     public_key = Column(String(200), nullable=False)
-#     balance = Column(Integer, nullable=False)
-#
-#
-# engine = create_engine("sqlite:///blockchain.db")
-# Base.metadata.create_all(engine)
+
+def create_new_wallet():
+    global user
+    # Create a new wallet
+    print("Creating a new wallet...")
+    resp = requests.get("http://127.0.0.1:8000/blocks/wallets/new/")
+    resp = resp.json()
+    print(resp.get("wallet_id"))
+    user = Wallet(resp.get("wallet_id"), resp.get("private_key"), resp.get("public_key"))
+    print(f"Wallet Info ~ Private key: \n{user.private_key}, Public Key: \n{user.public_key}")
+
+
+def display_current_blockchain_state():
+    print("Current Blockchain State:")
+    qoin.get_and_verify_current_block_chain_state()
+    qoin.print_current_chain_sate()
+
+
+def make_transaction():
+    print("Making a new transaction...")
+    transaction = [
+        {
+            "type": "input",
+            "name": "recipient",
+            "message": "Enter the recipient address:",
+        },
+        {
+            "type": "input",
+            "name": "amount",
+            "message": "Enter the amount to send:",
+        }
+    ]
+    trxn = prompt(transaction)
+    user.make_transaction(trxn["recipient"], int(trxn["amount"]))
+    print(f"Transaction to {trxn['recipient']} for {trxn['amount']} added to pending transactions.")
+
+
+def display_pending_transactions():
+    pass
+
+
+def mine_block():
+    print("Getting Latest BlockChain Snapshot")
+    qoin.get_and_verify_current_block_chain_state()
+    print("Mining a new block...")
+    qoin.mine_block(user.wallet_id)
+    print("Block mined and broadcast to the Network.")
+
+
+def show_wallet_menu():
+    while True:
+        wallet_menu = [
+            {
+                "type": "list",
+                "message": f"Current Balance: {user.get_wallet_balance()}\nSelect an option:",
+                "choices": [
+                    "Display Current Blockchain State",
+                    "Make a Transaction",
+                    "Display Pending Transactions",
+                    "Mine Block",
+                    "Exit"
+                ],
+                "name": "wallet_command"
+            }
+        ]
+        result = prompt(wallet_menu)
+
+        if result["wallet_command"] == "Display Current Blockchain State":
+            display_current_blockchain_state()
+        elif result["wallet_command"] == "Make a Transaction":
+            make_transaction()
+        elif result["wallet_command"] == "Display Pending Transactions":
+            display_pending_transactions()
+        elif result["wallet_command"] == "Mine Block":
+            mine_block()
+        elif result["wallet_command"] == "Exit":
+            print("Exiting the wallet.")
+            break
+
+
+# Main program
+menu = [
+    {
+        "type": "list",
+        "message": "Welcome to Qoin's Python Client (beta).",
+        "choices": ["Create a New Wallet", "Load An Existing Wallet"],
+        "name": "initial_command"
+    },
+]
+
+result = prompt(menu)
+if result["initial_command"] == "Create a New Wallet":
+    create_new_wallet()
+elif result["initial_command"] == "Load An Existing Wallet":
+    load_existing_wallet()
+
+
+# After loading or creating a wallet, show the wallet menu
+show_wallet_menu()
+
+
