@@ -5,7 +5,7 @@ from cryptography.hazmat.primitives import serialization
 from helperfunctions import *
 import json
 import requests
-from helperStructs import *
+from helperstructs import *
 import db
 from sqlalchemy import create_engine, desc
 from sqlalchemy.orm import sessionmaker
